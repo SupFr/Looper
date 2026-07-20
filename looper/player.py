@@ -25,23 +25,62 @@ _kb = keyboard.Controller()
 _mouse = mouse.Controller()
 
 
-def parse_hotkey(spec: str) -> list:
-    """'<ctrl>+<shift>+p' -> list of pynput key objects."""
-    keys = []
+# Names friends type without brackets that we can map to real keys.
+_KEY_ALIASES = {
+    "ctrl": "ctrl", "control": "ctrl",
+    "shift": "shift",
+    "alt": "alt",
+    "win": "cmd", "windows": "cmd", "cmd": "cmd",
+    "esc": "esc", "escape": "esc",
+    "enter": "enter", "return": "enter",
+    "space": "space", "spacebar": "space",
+    "tab": "tab", "backspace": "backspace", "delete": "delete", "del": "delete",
+    "home": "home", "end": "end", "insert": "insert",
+    "up": "up", "down": "down", "left": "left", "right": "right",
+    "pageup": "page_up", "pagedown": "page_down",
+    "capslock": "caps_lock", "numlock": "num_lock",
+    **{f"f{i}": f"f{i}" for i in range(1, 25)},
+}
+
+
+def normalize_hotkey(spec: str) -> str:
+    """Turn whatever a person typed into canonical '<ctrl>+<shift>+p' form.
+
+    Accepts 'F9', '<f9>', 'ctrl+shift+p', 'CTRL + F6', etc. Raises ValueError
+    with a friendly message when a part can't be understood.
+    """
+    parts_out = []
     for part in spec.split("+"):
-        part = part.strip().lower()
+        part = part.strip().lower().strip("<>")
         if not part:
             continue
+        if part in _KEY_ALIASES:
+            parts_out.append(f"<{_KEY_ALIASES[part]}>")
+        elif len(part) == 1:
+            parts_out.append(part)
+        else:
+            raise ValueError(
+                f"'{part}' isn't a key Looper knows. Use names like F9, "
+                "ctrl, shift, alt, space - or single letters.")
+    if not parts_out:
+        raise ValueError("The hotkey is empty - type a key like F9.")
+    return "+".join(parts_out)
+
+
+def parse_hotkey(spec: str) -> list:
+    """'<ctrl>+<shift>+p' (or anything normalize_hotkey accepts) -> pynput keys."""
+    keys = []
+    for part in normalize_hotkey(spec).split("+"):
         if part.startswith("<") and part.endswith(">"):
             name = part[1:-1]
             key = getattr(keyboard.Key, name, None)
             if key is None:
-                raise ValueError(f"unknown key <{name}>")
+                raise ValueError(
+                    f"'{name}' isn't a key Looper knows. Use names like F9, "
+                    "ctrl, shift, alt, space - or single letters.")
             keys.append(key)
         else:
             keys.append(keyboard.KeyCode.from_char(part))
-    if not keys:
-        raise ValueError("empty hotkey")
     return keys
 
 

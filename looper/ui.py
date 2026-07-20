@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +16,9 @@ from PySide6.QtWidgets import (
     QFileDialog, QMessageBox, QInputDialog, QSplitter,
 )
 
-from . import config, engine, hotkeys, matcher, onboarding, overlay, webhook
+import re
+
+from . import config, engine, hotkeys, matcher, onboarding, overlay, player, webhook
 from .config import Profile, Step
 
 
@@ -34,7 +37,7 @@ def _bgr_to_pixmap(bgr: np.ndarray) -> QPixmap:
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Looper v1.2")
+        self.setWindowTitle("Looper v1.3")
         self.resize(1060, 700)
 
         self.profile = Profile(name="Default")
@@ -42,9 +45,11 @@ class MainWindow(QMainWindow):
         self.engine: engine.LoopEngine | None = None
         self.hk = hotkeys.HotkeyManager()
         self._picker: overlay.RegionPicker | None = None
-        self._loading = False
+        self._loading = 0   # re-entrant depth counter, not a bool: nested
+                            # UI-fill routines must not unguard their parent
 
-        self._build()
+        with self._filling_ui():   # widget construction fires change signals
+            self._build()
         self._load_initial_profile()
         self._bind_hotkeys()
 
@@ -100,10 +105,12 @@ class MainWindow(QMainWindow):
         self.profile_combo.currentTextChanged.connect(self._on_profile_switch)
         lay.addWidget(self.profile_combo)
 
+        self._profile_buttons = []
         for text, slot in (("New", self._new_profile), ("Save", self._save_profile),
                            ("Delete", self._delete_profile)):
             b = QPushButton(text)
             b.clicked.connect(slot)
+            self._profile_buttons.append(b)
             lay.addWidget(b)
 
         lay.addStretch(1)
@@ -405,48 +412,45 @@ class MainWindow(QMainWindow):
         self._profile_to_ui()
 
     def _refresh_profile_combo(self) -> None:
-        self._loading = True
-        self.profile_combo.clear()
-        for p in Profile.list_all():
-            self.profile_combo.addItem(p.stem)
-        self.profile_combo.setCurrentText(self.profile.name)
-        self._loading = False
+        with self._filling_ui():
+            self.profile_combo.clear()
+            for p in Profile.list_all():
+                self.profile_combo.addItem(p.stem)
+            self.profile_combo.setCurrentText(self.profile.name)
 
     def _profile_to_ui(self) -> None:
-        self._loading = True
         p = self.profile
+        with self._filling_ui():
+            self.step_list.clear()
+            for s in p.steps:
+                self.step_list.addItem(self._step_item(s))
+            if p.steps:
+                self.step_list.setCurrentRow(0)
 
-        self.step_list.clear()
-        for s in p.steps:
-            self.step_list.addItem(self._step_item(s))
-        if p.steps:
-            self.step_list.setCurrentRow(0)
+            idx = self.pb_mode.findData(p.mode)
+            self.pb_mode.setCurrentIndex(max(0, idx))
+            self.pb_macro.setText(p.macro_file)
+            self.pb_player.setText(p.player_path)
+            self.pb_launch.setChecked(p.launch_player)
+            self.pb_play_hk.setText(p.play_hotkey)
+            self.pb_stop_hk.setText(p.stop_hotkey)
+            self.pb_pre.setValue(p.pre_playback_delay)
+            self.pb_poll.setValue(p.poll_interval)
 
-        idx = self.pb_mode.findData(p.mode)
-        self.pb_mode.setCurrentIndex(max(0, idx))
-        self.pb_macro.setText(p.macro_file)
-        self.pb_player.setText(p.player_path)
-        self.pb_launch.setChecked(p.launch_player)
-        self.pb_play_hk.setText(p.play_hotkey)
-        self.pb_stop_hk.setText(p.stop_hotkey)
-        self.pb_pre.setValue(p.pre_playback_delay)
-        self.pb_poll.setValue(p.poll_interval)
+            self.hk_edits[0].setText(p.hk_start)
+            self.hk_edits[1].setText(p.hk_stop)
+            self.hk_edits[2].setText(p.hk_panic)
+            self.btn_start.setText(f"Start  ({p.hk_start.strip('<>').upper()})")
+            self.btn_stop.setText(f"Stop  ({p.hk_stop.strip('<>').upper()})")
 
-        self.hk_edits[0].setText(p.hk_start)
-        self.hk_edits[1].setText(p.hk_stop)
-        self.hk_edits[2].setText(p.hk_panic)
-        self.btn_start.setText(f"Start  ({p.hk_start.strip('<>').upper()})")
-        self.btn_stop.setText(f"Stop  ({p.hk_stop.strip('<>').upper()})")
+            self.wh_enabled.setChecked(p.webhook_enabled)
+            self.wh_url.setText(p.webhook_url)
+            self.wh_cycle.setChecked(p.webhook_on_cycle)
+            self.wh_every.setValue(p.webhook_every)
+            self.wh_start.setChecked(p.webhook_on_start)
+            self.wh_stop.setChecked(p.webhook_on_stop)
+            self.wh_err.setChecked(p.webhook_on_error)
 
-        self.wh_enabled.setChecked(p.webhook_enabled)
-        self.wh_url.setText(p.webhook_url)
-        self.wh_cycle.setChecked(p.webhook_on_cycle)
-        self.wh_every.setValue(p.webhook_every)
-        self.wh_start.setChecked(p.webhook_on_start)
-        self.wh_stop.setChecked(p.webhook_on_stop)
-        self.wh_err.setChecked(p.webhook_on_error)
-
-        self._loading = False
         self._step_to_editor()
         self._refresh_guide()
 
@@ -474,26 +478,25 @@ class MainWindow(QMainWindow):
 
     def _step_to_editor(self) -> None:
         s = self._current_step()
-        self._loading = True
         enabled = s is not None
-        for w in (self.ed_name, self.ed_threshold, self.ed_click, self.ed_post,
-                  self.ed_timeout, self.ed_on_timeout, self.ed_enabled,
-                  self.btn_capture):
-            w.setEnabled(enabled)
-        if s:
-            self.ed_name.setText(s.name)
-            self.ed_threshold.setValue(s.threshold)
-            self.ed_click.setChecked(s.click)
-            self.ed_post.setValue(s.post_delay)
-            self.ed_timeout.setValue(s.timeout)
-            idx = self.ed_on_timeout.findData(s.on_timeout)
-            self.ed_on_timeout.setCurrentIndex(max(0, idx))
-            self.ed_enabled.setChecked(s.enabled)
-            self._show_thumb(s)
-        else:
-            self.thumb.setText("select a step")
-            self.thumb.setPixmap(QPixmap())
-        self._loading = False
+        with self._filling_ui():
+            for w in (self.ed_name, self.ed_threshold, self.ed_click, self.ed_post,
+                      self.ed_timeout, self.ed_on_timeout, self.ed_enabled,
+                      self.btn_capture):
+                w.setEnabled(enabled)
+            if s:
+                self.ed_name.setText(s.name)
+                self.ed_threshold.setValue(s.threshold)
+                self.ed_click.setChecked(s.click)
+                self.ed_post.setValue(s.post_delay)
+                self.ed_timeout.setValue(s.timeout)
+                idx = self.ed_on_timeout.findData(s.on_timeout)
+                self.ed_on_timeout.setCurrentIndex(max(0, idx))
+                self.ed_enabled.setChecked(s.enabled)
+                self._show_thumb(s)
+            else:
+                self.thumb.setText("select a step")
+                self.thumb.setPixmap(QPixmap())
 
     def _show_thumb(self, s: Step) -> None:
         if s.template and Path(s.template).is_file():
@@ -527,14 +530,17 @@ class MainWindow(QMainWindow):
         p.macro_file = self.pb_macro.text().strip()
         p.player_path = self.pb_player.text().strip()
         p.launch_player = self.pb_launch.isChecked()
-        p.play_hotkey = self.pb_play_hk.text().strip()
-        p.stop_hotkey = self.pb_stop_hk.text().strip()
         p.pre_playback_delay = self.pb_pre.value()
         p.poll_interval = self.pb_poll.value()
 
-        p.hk_start = self.hk_edits[0].text().strip()
-        p.hk_stop = self.hk_edits[1].text().strip()
-        p.hk_panic = self.hk_edits[2].text().strip()
+        p.play_hotkey = self._checked_hotkey(
+            self.pb_play_hk, p.play_hotkey, "play")
+        p.stop_hotkey = self._checked_hotkey(
+            self.pb_stop_hk, p.stop_hotkey, "stop")
+
+        p.hk_start = self._checked_hotkey(self.hk_edits[0], p.hk_start, "start")
+        p.hk_stop = self._checked_hotkey(self.hk_edits[1], p.hk_stop, "stop loop")
+        p.hk_panic = self._checked_hotkey(self.hk_edits[2], p.hk_panic, "panic")
         self.btn_start.setText(f"Start  ({p.hk_start.strip('<>').upper()})")
         self.btn_stop.setText(f"Stop  ({p.hk_stop.strip('<>').upper()})")
         self._bind_hotkeys()
@@ -547,6 +553,32 @@ class MainWindow(QMainWindow):
         p.webhook_on_stop = self.wh_stop.isChecked()
         p.webhook_on_error = self.wh_err.isChecked()
         self._refresh_guide()
+
+    @contextmanager
+    def _filling_ui(self):
+        """While active, widget-change signals must not write to the profile."""
+        self._loading += 1
+        try:
+            yield
+        finally:
+            self._loading -= 1
+
+    def _checked_hotkey(self, field: QLineEdit, previous: str, label: str) -> str:
+        """Validate a hotkey field. Good -> write the canonical form back.
+        Bad -> explain, restore the last working value. Never saves garbage."""
+        text = field.text().strip()
+        if not text:
+            return ""
+        try:
+            canonical = player.normalize_hotkey(text)
+        except ValueError as e:
+            self.log(f"That {label} hotkey won't work: {e} "
+                     f"Kept the old one ({previous or 'none'}).")
+            field.setText(previous)
+            return previous
+        if canonical != text:
+            field.setText(canonical)
+        return canonical
 
     # ==================================================================
     # setup guide
@@ -664,10 +696,19 @@ class MainWindow(QMainWindow):
 
     def _new_profile(self) -> None:
         name, ok = QInputDialog.getText(self, "New profile", "Profile name:")
-        if not ok or not name.strip():
+        if not ok:
+            return
+        # strip characters Windows can't put in a filename
+        name = re.sub(r'[<>:"/\\|?*]', "", name).strip()
+        if not name:
+            self.log("That name can't be used - try plain letters and numbers.")
+            return
+        if (config.PROFILE_DIR / f"{name}.json").is_file():
+            self.log(f"A profile called '{name}' already exists - "
+                     "pick it from the dropdown instead.")
             return
         self.profile.save()
-        self.profile = Profile(name=name.strip(),
+        self.profile = Profile(name=name,
                                steps=[Step(name="End screen")])
         self.profile.save()
         self._refresh_profile_combo()
@@ -734,6 +775,7 @@ class MainWindow(QMainWindow):
 
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
+        self._set_profile_controls(False)
         self.cycle_label.setText("0")
         self.log("=== Loop started ===")
         self._refresh_guide()
@@ -755,9 +797,16 @@ class MainWindow(QMainWindow):
                      "You can minimize this window and walk away.")
             self._refresh_guide()
 
+    def _set_profile_controls(self, enabled: bool) -> None:
+        """Profiles can't change under a running loop."""
+        self.profile_combo.setEnabled(enabled)
+        for b in self._profile_buttons:
+            b.setEnabled(enabled)
+
     def _on_engine_stopped(self, reason: str) -> None:
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
+        self._set_profile_controls(True)
         self.state_label.setText("Not running")
         self._highlight_step(-1)
         self._refresh_guide()

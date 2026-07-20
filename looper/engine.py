@@ -88,13 +88,51 @@ class LoopEngine(QThread):
                 return "abort"
         return "abort"
 
+    # -- preflight -------------------------------------------------------
+    def _preflight(self, steps: list[config.Step]) -> str:
+        """Everything that can fail should fail HERE, with a named fix,
+        not twenty minutes into an unattended farm. Returns '' when OK."""
+        from pathlib import Path
+
+        if not steps:
+            return ("Nothing to watch for yet - capture the end screen "
+                    "first (step 1 in the setup guide).")
+
+        desk = capture.virtual_desktop()
+        for s in steps:
+            if not Path(s.template).is_file():
+                return (f"The captured image for '{s.name}' is missing from "
+                        "this PC. Select the step and capture it again.")
+            if self._cache.get(s.template, self.p.grayscale) is None:
+                return (f"The captured image for '{s.name}' can't be read - "
+                        "it may be corrupted. Select the step and capture "
+                        "it again.")
+            x, y, w, h = s.region
+            if (x < desk["left"] or y < desk["top"]
+                    or x + w > desk["left"] + desk["width"]
+                    or y + h > desk["top"] + desk["height"]):
+                return (f"The screen area for '{s.name}' is outside your "
+                        "current display. Your screen setup (resolution or "
+                        "monitors) changed since you captured it - select "
+                        "the step and capture it again.")
+
+        if self.p.mode == config.MODE_PLAYER:
+            for label, spec in (("play", self.p.play_hotkey),
+                                ("stop", self.p.stop_hotkey)):
+                try:
+                    player.parse_hotkey(spec)
+                except ValueError as e:
+                    return (f"The player's {label} hotkey (Playback tab) "
+                            f"doesn't work: {e}")
+        return ""
+
     # -- main ------------------------------------------------------------
     def run(self) -> None:
         p = self.p
         steps = [s for s in p.steps if s.enabled and s.template and s.has_region]
-        if not steps:
-            self.sig_stopped.emit("Nothing to watch for yet - capture the end "
-                                  "screen first (step 1 in the setup guide).")
+        problem = self._preflight(steps)
+        if problem:
+            self.sig_stopped.emit(problem)
             return
 
         mp = player.MacroPlayer(p, self._log)
@@ -170,7 +208,10 @@ class LoopEngine(QThread):
         except FileNotFoundError as e:
             reason = str(e)
         except Exception as e:  # noqa: BLE001 - surface anything to the UI
-            reason = f"{type(e).__name__}: {e}"
+            reason = ("Something unexpected stopped the loop:\n"
+                      f"{type(e).__name__}: {e}\n\n"
+                      "Try starting it again. If it keeps happening, send "
+                      "this message to whoever gave you Looper.")
         finally:
             self.sig_step.emit(-1)
             mp.shutdown()
