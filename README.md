@@ -1,4 +1,4 @@
-# Looper v1.0
+# Looper v1.4
 
 Vision-driven macro loop supervisor. Wraps any recorded macro (TinyTask,
 Informaal, a compiled .exe) in a closed loop: it watches the screen for the
@@ -15,7 +15,10 @@ python main.py
 
 ## Setup flow
 
-1. **Detection steps** (left panel)
+First run shows only the 3-step guide and a big status block. Click
+**More options** in the header for the full editor (steps, tabs, log).
+
+1. **Detection steps** (left panel, under More options)
    - Step 1 is the end-screen detector. Select it, hit **Select region on
      screen**, drag a box around something that ONLY appears on the end
      screen (the Retry button is perfect). Enable **Click when detected** if
@@ -26,7 +29,8 @@ python main.py
 2. **Playback tab**
    - *Player app + macro file*: point it at `tinytask.exe` and your `.rec`.
      Looper launches TinyTask with the file and drives it via its play
-     hotkey (default `<ctrl>+<shift>+<alt>+p`).
+     hotkey. Hotkey fields are press-to-record: click the field and press
+     the actual keys.
    - *Standalone .exe*: your macro is compiled — Looper runs and kills
      the process directly. No hotkeys needed. Most reliable.
    - *Delay before playback* = map load time.

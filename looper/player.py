@@ -67,6 +67,58 @@ def normalize_hotkey(spec: str) -> str:
     return "+".join(parts_out)
 
 
+# canonical <name> -> Qt portable key-sequence token (for press-to-record UI)
+_QT_NAMES = {
+    "ctrl": "Ctrl", "shift": "Shift", "alt": "Alt", "cmd": "Meta",
+    "esc": "Esc", "enter": "Return", "space": "Space", "tab": "Tab",
+    "backspace": "Backspace", "delete": "Del", "home": "Home", "end": "End",
+    "insert": "Ins", "up": "Up", "down": "Down", "left": "Left",
+    "right": "Right", "page_up": "PgUp", "page_down": "PgDown",
+    "caps_lock": "CapsLock", "num_lock": "NumLock",
+    **{f"f{i}": f"F{i}" for i in range(1, 25)},
+}
+_FROM_QT = {v.lower(): k for k, v in _QT_NAMES.items()}
+_FROM_QT.update({"del": "delete", "ins": "insert", "enter": "enter",
+                 "return": "enter", "meta": "cmd"})
+
+
+def to_qt_keysequence(spec: str) -> str:
+    """'<ctrl>+<shift>+p' -> 'Ctrl+Shift+P' (empty string if unmappable)."""
+    try:
+        parts = normalize_hotkey(spec).split("+")
+    except ValueError:
+        return ""
+    out = []
+    for part in parts:
+        if part.startswith("<"):
+            name = part[1:-1]
+            if name not in _QT_NAMES:
+                return ""
+            out.append(_QT_NAMES[name])
+        else:
+            out.append(part.upper())
+    return "+".join(out)
+
+
+def from_qt_keysequence(qt: str) -> str:
+    """'Ctrl+Shift+P' -> '<ctrl>+<shift>+p'. Raises ValueError if unmappable."""
+    out = []
+    for part in qt.split("+"):
+        part = part.strip()
+        if not part:
+            continue
+        low = part.lower()
+        if low in _FROM_QT:
+            out.append(f"<{_FROM_QT[low]}>")
+        elif len(part) == 1:
+            out.append(low)
+        else:
+            raise ValueError(f"'{part}' can't be used as a hotkey here.")
+    if not out:
+        raise ValueError("empty")
+    return "+".join(out)
+
+
 def parse_hotkey(spec: str) -> list:
     """'<ctrl>+<shift>+p' (or anything normalize_hotkey accepts) -> pynput keys."""
     keys = []

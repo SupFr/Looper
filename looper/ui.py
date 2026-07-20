@@ -7,16 +7,17 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QImage, QPixmap, QCloseEvent
+from PySide6.QtCore import Qt, QSize, Signal
+from PySide6.QtGui import QImage, QPixmap, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QFrame, QHBoxLayout, QVBoxLayout, QGridLayout,
     QLabel, QPushButton, QLineEdit, QComboBox, QCheckBox, QDoubleSpinBox,
     QSpinBox, QListWidget, QListWidgetItem, QPlainTextEdit, QTabWidget,
-    QFileDialog, QMessageBox, QInputDialog, QSplitter,
+    QFileDialog, QMessageBox, QInputDialog, QSplitter, QKeySequenceEdit,
 )
 
 import re
+from pathlib import PurePath
 
 from . import config, engine, hotkeys, matcher, onboarding, overlay, player, webhook
 from .config import Profile, Step
@@ -34,10 +35,50 @@ def _bgr_to_pixmap(bgr: np.ndarray) -> QPixmap:
     return QPixmap.fromImage(QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888).copy())
 
 
+class HotkeyEdit(QKeySequenceEdit):
+    """Press-to-record hotkey field. Click it, press the keys, done.
+
+    Speaks the app's canonical format ('<ctrl>+<shift>+p') at the edges;
+    nobody has to type bracket syntax anymore.
+    """
+
+    changed = Signal()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setMaximumSequenceLength(1)
+        self.setClearButtonEnabled(True)
+        self._canonical = ""
+        self.editingFinished.connect(self._on_edited)
+
+    def canonical(self) -> str:
+        return self._canonical
+
+    def set_canonical(self, spec: str) -> None:
+        self._canonical = spec.strip()
+        qt = player.to_qt_keysequence(self._canonical) if self._canonical else ""
+        self.setKeySequence(QKeySequence(qt))
+
+    def _on_edited(self) -> None:
+        qt = self.keySequence().toString(QKeySequence.PortableText)
+        if not qt:
+            self._canonical = ""
+            self.changed.emit()
+            return
+        try:
+            self._canonical = player.from_qt_keysequence(qt)
+        except ValueError:
+            # combination we can't replay (media keys etc.) - roll back
+            self.set_canonical(self._canonical)
+            return
+        self.changed.emit()
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Looper v1.3")
+        self.setWindowTitle("Looper v1.4")
+        self.setMinimumSize(760, 420)
         self.resize(1060, 700)
 
         self.profile = Profile(name="Default")
@@ -45,6 +86,7 @@ class MainWindow(QMainWindow):
         self.engine: engine.LoopEngine | None = None
         self.hk = hotkeys.HotkeyManager()
         self._picker: overlay.RegionPicker | None = None
+        self._active_step = -1
         self._loading = 0   # re-entrant depth counter, not a bool: nested
                             # UI-fill routines must not unguard their parent
 
@@ -77,18 +119,79 @@ class MainWindow(QMainWindow):
         self.guide.setVisible(not onboarding.guide_dismissed())
         outer.addWidget(self.guide)
 
+        outer.addWidget(self._build_hero())
+
+        # Everything below the hero is the "tinker" face: hidden by default
+        # so a friend's first sight is guide + status + Start, nothing else.
+        self.tinker = QWidget()
+        tv = QVBoxLayout(self.tinker)
+        tv.setContentsMargins(0, 0, 0, 0)
+        tv.setSpacing(10)
+
         split = QSplitter(Qt.Horizontal)
         split.addWidget(self._build_steps_panel())
         split.addWidget(self._build_settings_panel())
         split.setSizes([560, 480])
-        outer.addWidget(split, 1)
+        tv.addWidget(split, 1)
 
         self.log_view = QPlainTextEdit(readOnly=True, maximumBlockCount=500)
         self.log_view.setFixedHeight(130)
         self.log_view.setPlaceholderText(
             "Activity shows up here once the loop is running - every match "
             "detected, every restart, every click.")
-        outer.addWidget(self.log_view)
+        tv.addWidget(self.log_view)
+
+        outer.addWidget(self.tinker, 1)
+        self._spacer = QWidget()
+        outer.addWidget(self._spacer, 1)
+
+        open_ = onboarding.tinker_open()
+        self.tinker.setVisible(open_)
+        self._spacer.setVisible(not open_)
+        self.btn_tinker.setChecked(open_)
+        self.btn_tinker.setText("Fewer options" if open_ else "More options")
+
+    def _build_hero(self) -> QFrame:
+        hero = QFrame()
+        hero.setObjectName("hero")
+        hero.setProperty("mode", "idle")
+        lay = QHBoxLayout(hero)
+        lay.setContentsMargins(20, 14, 20, 14)
+
+        self.state_label = QLabel("Not running")
+        self.state_label.setObjectName("heroState")
+        lay.addWidget(self.state_label, 1)
+
+        right = QVBoxLayout()
+        right.setSpacing(0)
+        self.cycle_label = QLabel("0")
+        self.cycle_label.setObjectName("heroCount")
+        self.cycle_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        cap = QLabel("matches done")
+        cap.setObjectName("heroCountCaption")
+        cap.setAlignment(Qt.AlignRight)
+        right.addWidget(self.cycle_label)
+        right.addWidget(cap)
+        lay.addLayout(right)
+
+        self.hero = hero
+        return hero
+
+    def _set_hero_mode(self, mode: str) -> None:
+        self.hero.setProperty("mode", mode)
+        self.hero.style().unpolish(self.hero)
+        self.hero.style().polish(self.hero)
+        for child in (self.state_label, self.cycle_label):
+            child.style().unpolish(child)
+            child.style().polish(child)
+
+    def _update_title(self) -> None:
+        running = bool(self.engine and self.engine.isRunning())
+        if running:
+            self.setWindowTitle(
+                f"Looper - {self.cycle_label.text()} matches - running")
+        else:
+            self.setWindowTitle("Looper v1.4")
 
     def _build_header(self) -> QFrame:
         panel = _panel()
@@ -115,17 +218,12 @@ class MainWindow(QMainWindow):
 
         lay.addStretch(1)
 
-        self.state_label = QLabel("Not running")
-        self.state_label.setObjectName("stateLabel")
-        lay.addWidget(self.state_label)
+        self.btn_tinker = QPushButton("More options")
+        self.btn_tinker.setCheckable(True)
+        self.btn_tinker.toggled.connect(self._toggle_tinker)
+        lay.addWidget(self.btn_tinker)
 
-        lay.addSpacing(14)
-        lay.addWidget(QLabel("Matches done"))
-        self.cycle_label = QLabel("0")
-        self.cycle_label.setObjectName("cycleLabel")
-        lay.addWidget(self.cycle_label)
-
-        lay.addSpacing(14)
+        lay.addSpacing(8)
         self.btn_start = QPushButton("Start  (F9)")
         self.btn_start.setObjectName("primary")
         self.btn_start.clicked.connect(self.start_loop)
@@ -178,10 +276,9 @@ class MainWindow(QMainWindow):
         ed.addWidget(self.ed_name, r, 1, 1, 2)
 
         self.thumb = QLabel("nothing captured\nyet")
+        self.thumb.setObjectName("thumb")
         self.thumb.setFixedSize(QSize(150, 84))
         self.thumb.setAlignment(Qt.AlignCenter)
-        self.thumb.setStyleSheet(
-            "border: 1px dashed #30363d; border-radius: 6px; color: #545d68;")
         ed.addWidget(self.thumb, r, 3, 3, 1)
         r += 1
 
@@ -263,7 +360,7 @@ class MainWindow(QMainWindow):
         g.addWidget(self.pb_macro, r, 1)
         b = QPushButton("Browse")
         b.setFixedWidth(64)
-        b.clicked.connect(lambda: self._browse(self.pb_macro, "Macro file"))
+        b.clicked.connect(self._browse_macro)
         g.addWidget(b, r, 2)
         r += 1
 
@@ -285,21 +382,21 @@ class MainWindow(QMainWindow):
         r += 1
 
         g.addWidget(QLabel("Play hotkey"), r, 0)
-        self.pb_play_hk = QLineEdit()
-        self.pb_play_hk.editingFinished.connect(self._apply_settings)
+        self.pb_play_hk = HotkeyEdit()
+        self.pb_play_hk.changed.connect(self._apply_settings)
         g.addWidget(self.pb_play_hk, r, 1, 1, 2)
         r += 1
 
         g.addWidget(QLabel("Stop hotkey"), r, 0)
-        self.pb_stop_hk = QLineEdit()
-        self.pb_stop_hk.editingFinished.connect(self._apply_settings)
+        self.pb_stop_hk = HotkeyEdit()
+        self.pb_stop_hk.changed.connect(self._apply_settings)
         g.addWidget(self.pb_stop_hk, r, 1, 1, 2)
         r += 1
 
         hint = QLabel("These are the player app's own shortcuts - Looper "
-                      "presses them for you. TinyTask uses the same key for "
-                      "play and stop (default <ctrl>+<shift>+<alt>+p). "
-                      "Write keys like <f6> or <ctrl>+<shift>+p.")
+                      "presses them for you. Click a field and press the "
+                      "actual keys to set it. TinyTask uses the same key "
+                      "for play and stop.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         g.addWidget(hint, r, 0, 1, 3)
@@ -331,16 +428,16 @@ class MainWindow(QMainWindow):
         g.setVerticalSpacing(8)
 
         labels = ("Start loop", "Stop loop", "Panic (stop everything)")
-        self.hk_edits: list[QLineEdit] = []
+        self.hk_edits: list[HotkeyEdit] = []
         for i, text in enumerate(labels):
             g.addWidget(QLabel(text), i, 0)
-            e = QLineEdit()
-            e.editingFinished.connect(self._apply_settings)
+            e = HotkeyEdit()
+            e.changed.connect(self._apply_settings)
             g.addWidget(e, i, 1)
             self.hk_edits.append(e)
 
-        hint = QLabel("Global - they work while the game is focused. "
-                      "Format: <f9>, <ctrl>+<alt>+s, etc.")
+        hint = QLabel("These work while the game is focused. Click a field "
+                      "and press the actual keys to set it.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         g.addWidget(hint, 3, 0, 1, 2)
@@ -364,9 +461,15 @@ class MainWindow(QMainWindow):
         self.wh_url.setEchoMode(QLineEdit.Password)
         self.wh_url.editingFinished.connect(self._apply_settings)
         g.addWidget(self.wh_url, r, 1)
+        show = QCheckBox("Show")
+        show.setToolTip("The link is hidden because anyone who has it can "
+                        "post in your channel.")
+        show.toggled.connect(lambda on: self.wh_url.setEchoMode(
+            QLineEdit.Normal if on else QLineEdit.Password))
+        g.addWidget(show, r, 2)
         b = QPushButton("Test")
         b.clicked.connect(self._test_webhook)
-        g.addWidget(b, r, 2)
+        g.addWidget(b, r, 3)
         r += 1
 
         self.wh_cycle = QCheckBox("Message me when a match finishes")
@@ -432,14 +535,14 @@ class MainWindow(QMainWindow):
             self.pb_macro.setText(p.macro_file)
             self.pb_player.setText(p.player_path)
             self.pb_launch.setChecked(p.launch_player)
-            self.pb_play_hk.setText(p.play_hotkey)
-            self.pb_stop_hk.setText(p.stop_hotkey)
+            self.pb_play_hk.set_canonical(p.play_hotkey)
+            self.pb_stop_hk.set_canonical(p.stop_hotkey)
             self.pb_pre.setValue(p.pre_playback_delay)
             self.pb_poll.setValue(p.poll_interval)
 
-            self.hk_edits[0].setText(p.hk_start)
-            self.hk_edits[1].setText(p.hk_stop)
-            self.hk_edits[2].setText(p.hk_panic)
+            self.hk_edits[0].set_canonical(p.hk_start)
+            self.hk_edits[1].set_canonical(p.hk_stop)
+            self.hk_edits[2].set_canonical(p.hk_panic)
             self.btn_start.setText(f"Start  ({p.hk_start.strip('<>').upper()})")
             self.btn_stop.setText(f"Stop  ({p.hk_stop.strip('<>').upper()})")
 
@@ -464,7 +567,10 @@ class MainWindow(QMainWindow):
     def _refresh_step_row(self, row: int) -> None:
         if 0 <= row < len(self.profile.steps):
             s = self.profile.steps[row]
-            self.step_list.item(row).setText(self._step_item(s).text())
+            base = self._step_item(s).text()
+            if row == self._active_step:
+                base = f"▶  {base}"
+            self.step_list.item(row).setText(base)
 
     # -- step editor sync --
     def _current_step(self) -> Step | None:
@@ -533,14 +639,12 @@ class MainWindow(QMainWindow):
         p.pre_playback_delay = self.pb_pre.value()
         p.poll_interval = self.pb_poll.value()
 
-        p.play_hotkey = self._checked_hotkey(
-            self.pb_play_hk, p.play_hotkey, "play")
-        p.stop_hotkey = self._checked_hotkey(
-            self.pb_stop_hk, p.stop_hotkey, "stop")
+        p.play_hotkey = self.pb_play_hk.canonical()
+        p.stop_hotkey = self.pb_stop_hk.canonical()
 
-        p.hk_start = self._checked_hotkey(self.hk_edits[0], p.hk_start, "start")
-        p.hk_stop = self._checked_hotkey(self.hk_edits[1], p.hk_stop, "stop loop")
-        p.hk_panic = self._checked_hotkey(self.hk_edits[2], p.hk_panic, "panic")
+        p.hk_start = self.hk_edits[0].canonical()
+        p.hk_stop = self.hk_edits[1].canonical()
+        p.hk_panic = self.hk_edits[2].canonical()
         self.btn_start.setText(f"Start  ({p.hk_start.strip('<>').upper()})")
         self.btn_stop.setText(f"Stop  ({p.hk_stop.strip('<>').upper()})")
         self._bind_hotkeys()
@@ -563,22 +667,11 @@ class MainWindow(QMainWindow):
         finally:
             self._loading -= 1
 
-    def _checked_hotkey(self, field: QLineEdit, previous: str, label: str) -> str:
-        """Validate a hotkey field. Good -> write the canonical form back.
-        Bad -> explain, restore the last working value. Never saves garbage."""
-        text = field.text().strip()
-        if not text:
-            return ""
-        try:
-            canonical = player.normalize_hotkey(text)
-        except ValueError as e:
-            self.log(f"That {label} hotkey won't work: {e} "
-                     f"Kept the old one ({previous or 'none'}).")
-            field.setText(previous)
-            return previous
-        if canonical != text:
-            field.setText(canonical)
-        return canonical
+    def _toggle_tinker(self, open_: bool) -> None:
+        self.tinker.setVisible(open_)
+        self._spacer.setVisible(not open_)
+        self.btn_tinker.setText("Fewer options" if open_ else "More options")
+        onboarding.set_tinker(open_)
 
     # ==================================================================
     # setup guide
@@ -594,7 +687,7 @@ class MainWindow(QMainWindow):
         self._capture_region()
 
     def _guide_macro(self) -> None:
-        self._browse(self.pb_macro, "Pick your macro recording")
+        self._browse_macro()
 
     def _guide_dismiss(self) -> None:
         onboarding.dismiss_guide()
@@ -627,6 +720,24 @@ class MainWindow(QMainWindow):
             target.setText(path)
             self._apply_settings()
 
+    def _browse_macro(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Pick your macro recording", "",
+            "Macro recordings (*.rec *.mcr *.ahk *.exe);;All files (*)")
+        if not path:
+            return
+        self.pb_macro.setText(path)
+        # nobody should have to answer "how does your macro run?" - the
+        # file extension already knows
+        mode = (config.MODE_STANDALONE if PurePath(path).suffix.lower() == ".exe"
+                else config.MODE_PLAYER)
+        idx = self.pb_mode.findData(mode)
+        if idx >= 0 and idx != self.pb_mode.currentIndex():
+            self.pb_mode.setCurrentIndex(idx)
+            self.log("Set 'How your macro runs' automatically from the "
+                     "file you picked.")
+        self._apply_settings()
+
     def _add_step(self) -> None:
         self.profile.steps.append(Step(name=f"Step {len(self.profile.steps) + 1}"))
         self.step_list.addItem(self._step_item(self.profile.steps[-1]))
@@ -636,8 +747,20 @@ class MainWindow(QMainWindow):
         row = self.step_list.currentRow()
         if row < 0:
             return
+        s = self.profile.steps[row]
+        if s.template:   # captured work would be lost - confirm
+            box = QMessageBox(self)
+            box.setWindowTitle("Remove step")
+            box.setText(f"Remove the step '{s.name}'?\n\n"
+                        "Its captured image goes with it.")
+            rm = box.addButton("Remove step", QMessageBox.DestructiveRole)
+            box.addButton("Keep it", QMessageBox.RejectRole)
+            box.exec()
+            if box.clickedButton() is not rm:
+                return
         self.profile.steps.pop(row)
         self.step_list.takeItem(row)
+        self._refresh_guide()
 
     def _move_step(self, delta: int) -> None:
         row = self.step_list.currentRow()
@@ -777,6 +900,8 @@ class MainWindow(QMainWindow):
         self.btn_stop.setEnabled(True)
         self._set_profile_controls(False)
         self.cycle_label.setText("0")
+        self._set_hero_mode("running")
+        self._update_title()
         self.log("=== Loop started ===")
         self._refresh_guide()
 
@@ -791,6 +916,7 @@ class MainWindow(QMainWindow):
 
     def _on_cycle(self, n: int) -> None:
         self.cycle_label.setText(str(n))
+        self._update_title()
         if n == 1 and not onboarding.first_cycle_done():
             onboarding.mark_first_cycle()
             self.log("First full cycle done - it's farming on its own now. "
@@ -807,20 +933,32 @@ class MainWindow(QMainWindow):
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self._set_profile_controls(True)
-        self.state_label.setText("Not running")
         self._highlight_step(-1)
+        self._update_title()
         self._refresh_guide()
         if reason:
+            self.state_label.setText("Stopped - needs you")
+            self._set_hero_mode("error")
             self.log(f"Stopped: {reason}")
             QMessageBox.warning(self, "Loop stopped", reason)
         else:
+            self.state_label.setText("Not running")
+            self._set_hero_mode("idle")
             self.log("=== Loop stopped ===")
 
     def _highlight_step(self, idx: int) -> None:
-        for i in range(self.step_list.count()):
+        """Mark the step the engine is watching. Rebuild every row from the
+        profile (the source of truth) so names never get mangled."""
+        self._active_step = idx
+        for i, s in enumerate(self.profile.steps):
+            if i >= self.step_list.count():
+                break
             item = self.step_list.item(i)
-            base = item.text().lstrip("> ")
-            item.setText(f"> {base}" if i == idx else base)
+            base = self._step_item(s).text()
+            font = item.font()
+            font.setBold(i == idx)
+            item.setFont(font)
+            item.setText(f"▶  {base}" if i == idx else base)
 
     # -- misc --
     def log(self, msg: str) -> None:

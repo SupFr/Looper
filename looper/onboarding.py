@@ -55,6 +55,15 @@ def dismiss_guide() -> None:
     _write(dismissed=True)
 
 
+def tinker_open() -> bool:
+    """Whether the advanced panels (steps editor, tabs, log) are shown."""
+    return _state().get("tinker", False)
+
+
+def set_tinker(open_: bool) -> None:
+    _write(tinker=open_)
+
+
 @dataclass
 class _Row:
     frame: QFrame
