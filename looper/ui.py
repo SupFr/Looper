@@ -34,7 +34,7 @@ def _bgr_to_pixmap(bgr: np.ndarray) -> QPixmap:
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Looper v1.1")
+        self.setWindowTitle("Looper v1.2")
         self.resize(1060, 700)
 
         self.profile = Profile(name="Default")
@@ -108,12 +108,12 @@ class MainWindow(QMainWindow):
 
         lay.addStretch(1)
 
-        self.state_label = QLabel("Idle")
+        self.state_label = QLabel("Not running")
         self.state_label.setObjectName("stateLabel")
         lay.addWidget(self.state_label)
 
         lay.addSpacing(14)
-        lay.addWidget(QLabel("Cycles"))
+        lay.addWidget(QLabel("Matches done"))
         self.cycle_label = QLabel("0")
         self.cycle_label.setObjectName("cycleLabel")
         lay.addWidget(self.cycle_label)
@@ -137,7 +137,7 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(14, 12, 14, 12)
 
         head = QHBoxLayout()
-        lbl = QLabel("DETECTION STEPS")
+        lbl = QLabel("WHAT LOOPER WATCHES FOR")
         lbl.setObjectName("h2")
         head.addWidget(lbl)
         head.addStretch(1)
@@ -149,8 +149,9 @@ class MainWindow(QMainWindow):
             head.addWidget(b)
         lay.addLayout(head)
 
-        hint = QLabel("Step 1 = end-screen detector (stops the macro). "
-                      "Later steps click through menus back into a match.")
+        hint = QLabel("Step 1 is the end screen - when Looper sees it, the "
+                      "macro stops. Any steps after that click through the "
+                      "menus back into a match.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         lay.addWidget(hint)
@@ -177,14 +178,17 @@ class MainWindow(QMainWindow):
         ed.addWidget(self.thumb, r, 3, 3, 1)
         r += 1
 
-        self.btn_capture = QPushButton("Select region on screen")
+        self.btn_capture = QPushButton("Capture from screen")
         self.btn_capture.clicked.connect(self._capture_region)
         ed.addWidget(self.btn_capture, r, 0, 1, 3)
         r += 1
 
-        ed.addWidget(QLabel("Match %"), r, 0)
+        ed.addWidget(QLabel("Match strictness"), r, 0)
         self.ed_threshold = QDoubleSpinBox(minimum=0.5, maximum=1.0,
                                            singleStep=0.01, decimals=2)
+        self.ed_threshold.setToolTip(
+            "How closely the screen has to match your captured image "
+            "before it counts. Lower it a little if Looper keeps missing it.")
         self.ed_threshold.valueChanged.connect(self._apply_editor)
         ed.addWidget(self.ed_threshold, r, 1)
         self.ed_click = QCheckBox("Click when detected")
@@ -192,22 +196,24 @@ class MainWindow(QMainWindow):
         ed.addWidget(self.ed_click, r, 2)
         r += 1
 
-        ed.addWidget(QLabel("Delay after (s)"), r, 0)
+        ed.addWidget(QLabel("Wait after (seconds)"), r, 0)
         self.ed_post = QDoubleSpinBox(minimum=0.0, maximum=120.0, singleStep=0.5)
+        self.ed_post.setToolTip("Pause after this step before moving on - "
+                                "gives menus time to open.")
         self.ed_post.valueChanged.connect(self._apply_editor)
         ed.addWidget(self.ed_post, r, 1)
-        ed.addWidget(QLabel("Timeout (s, 0 = forever)"), r, 2)
+        ed.addWidget(QLabel("Give up after (seconds, 0 = never)"), r, 2)
         self.ed_timeout = QDoubleSpinBox(minimum=0.0, maximum=3600.0, singleStep=5.0)
         self.ed_timeout.valueChanged.connect(self._apply_editor)
         ed.addWidget(self.ed_timeout, r, 3)
         r += 1
 
-        ed.addWidget(QLabel("On timeout"), r, 0)
+        ed.addWidget(QLabel("If it never shows"), r, 0)
         self.ed_on_timeout = QComboBox()
-        self.ed_on_timeout.addItems([config.ON_TIMEOUT_RESTART,
-                                     config.ON_TIMEOUT_SKIP,
-                                     config.ON_TIMEOUT_STOP])
-        self.ed_on_timeout.currentTextChanged.connect(self._apply_editor)
+        self.ed_on_timeout.addItem("start the cycle over", config.ON_TIMEOUT_RESTART)
+        self.ed_on_timeout.addItem("skip this step", config.ON_TIMEOUT_SKIP)
+        self.ed_on_timeout.addItem("stop and tell me", config.ON_TIMEOUT_STOP)
+        self.ed_on_timeout.currentIndexChanged.connect(self._apply_editor)
         ed.addWidget(self.ed_on_timeout, r, 1)
         self.ed_enabled = QCheckBox("Enabled")
         self.ed_enabled.stateChanged.connect(self._apply_editor)
@@ -235,37 +241,38 @@ class MainWindow(QMainWindow):
         g.setVerticalSpacing(8)
         r = 0
 
-        g.addWidget(QLabel("Macro type"), r, 0)
+        g.addWidget(QLabel("How your macro runs"), r, 0)
         self.pb_mode = QComboBox()
-        self.pb_mode.addItem("Player app + macro file (TinyTask)", config.MODE_PLAYER)
-        self.pb_mode.addItem("Standalone macro .exe", config.MODE_STANDALONE)
+        self.pb_mode.addItem("A player app opens it (TinyTask)", config.MODE_PLAYER)
+        self.pb_mode.addItem("It's a program that runs by itself (.exe)",
+                             config.MODE_STANDALONE)
         self.pb_mode.currentIndexChanged.connect(self._apply_settings)
         g.addWidget(self.pb_mode, r, 1, 1, 2)
         r += 1
 
-        g.addWidget(QLabel("Macro file"), r, 0)
+        g.addWidget(QLabel("Macro recording"), r, 0)
         self.pb_macro = QLineEdit()
         self.pb_macro.editingFinished.connect(self._apply_settings)
         g.addWidget(self.pb_macro, r, 1)
-        b = QPushButton("...")
-        b.setFixedWidth(34)
+        b = QPushButton("Browse")
+        b.setFixedWidth(64)
         b.clicked.connect(lambda: self._browse(self.pb_macro, "Macro file"))
         g.addWidget(b, r, 2)
         r += 1
 
-        g.addWidget(QLabel("Player app (.exe)"), r, 0)
+        g.addWidget(QLabel("Player app"), r, 0)
         self.pb_player = QLineEdit()
         self.pb_player.setPlaceholderText("e.g. C:\\Tools\\tinytask.exe")
         self.pb_player.editingFinished.connect(self._apply_settings)
         g.addWidget(self.pb_player, r, 1)
-        b = QPushButton("...")
-        b.setFixedWidth(34)
+        b = QPushButton("Browse")
+        b.setFixedWidth(64)
         b.clicked.connect(lambda: self._browse(self.pb_player, "Player app",
                                                "Programs (*.exe)"))
         g.addWidget(b, r, 2)
         r += 1
 
-        self.pb_launch = QCheckBox("Launch player app with the macro file on start")
+        self.pb_launch = QCheckBox("Open the player app for me when the loop starts")
         self.pb_launch.stateChanged.connect(self._apply_settings)
         g.addWidget(self.pb_launch, r, 0, 1, 3)
         r += 1
@@ -282,23 +289,28 @@ class MainWindow(QMainWindow):
         g.addWidget(self.pb_stop_hk, r, 1, 1, 2)
         r += 1
 
-        hint = QLabel("TinyTask toggles play/stop on the same hotkey "
-                      "(default <ctrl>+<shift>+<alt>+p). Format: <ctrl>+<shift>+p, "
-                      "<f6>, plain letters allowed.")
+        hint = QLabel("These are the player app's own shortcuts - Looper "
+                      "presses them for you. TinyTask uses the same key for "
+                      "play and stop (default <ctrl>+<shift>+<alt>+p). "
+                      "Write keys like <f6> or <ctrl>+<shift>+p.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         g.addWidget(hint, r, 0, 1, 3)
         r += 1
 
-        g.addWidget(QLabel("Delay before playback (s)"), r, 0)
+        g.addWidget(QLabel("Map load time (seconds)"), r, 0)
         self.pb_pre = QDoubleSpinBox(minimum=0.0, maximum=300.0, singleStep=0.5)
-        self.pb_pre.setToolTip("Time for the map to load before the macro fires.")
+        self.pb_pre.setToolTip("How long your game takes to load into a match. "
+                               "The macro waits this long before it starts "
+                               "playing. Raise it if the macro starts too early.")
         self.pb_pre.valueChanged.connect(self._apply_settings)
         g.addWidget(self.pb_pre, r, 1)
         r += 1
 
-        g.addWidget(QLabel("Poll interval (s)"), r, 0)
+        g.addWidget(QLabel("Check the screen every (seconds)"), r, 0)
         self.pb_poll = QDoubleSpinBox(minimum=0.05, maximum=5.0, singleStep=0.05)
+        self.pb_poll.setToolTip("How often Looper looks for your captured "
+                                "images. The default is fine for almost everyone.")
         self.pb_poll.valueChanged.connect(self._apply_settings)
         g.addWidget(self.pb_poll, r, 1)
         r += 1
@@ -334,7 +346,7 @@ class MainWindow(QMainWindow):
         g.setVerticalSpacing(8)
         r = 0
 
-        self.wh_enabled = QCheckBox("Enable webhook notifications")
+        self.wh_enabled = QCheckBox("Send updates to my phone (through Discord)")
         self.wh_enabled.stateChanged.connect(self._apply_settings)
         g.addWidget(self.wh_enabled, r, 0, 1, 3)
         r += 1
@@ -350,27 +362,29 @@ class MainWindow(QMainWindow):
         g.addWidget(b, r, 2)
         r += 1
 
-        self.wh_cycle = QCheckBox("Notify on completed cycle")
+        self.wh_cycle = QCheckBox("Message me when a match finishes")
         self.wh_cycle.stateChanged.connect(self._apply_settings)
         g.addWidget(self.wh_cycle, r, 0, 1, 2)
         r += 1
-        g.addWidget(QLabel("Every N cycles"), r, 0)
+        g.addWidget(QLabel("...but only every N matches"), r, 0)
         self.wh_every = QSpinBox(minimum=1, maximum=1000)
         self.wh_every.valueChanged.connect(self._apply_settings)
         g.addWidget(self.wh_every, r, 1)
         r += 1
 
-        self.wh_start = QCheckBox("Notify on loop start")
-        self.wh_stop = QCheckBox("Notify on loop stop")
-        self.wh_err = QCheckBox("Notify on error")
+        self.wh_start = QCheckBox("Message me when the loop starts")
+        self.wh_stop = QCheckBox("Message me when the loop stops")
+        self.wh_err = QCheckBox("Message me if something goes wrong")
         for cb in (self.wh_start, self.wh_stop, self.wh_err):
             cb.stateChanged.connect(self._apply_settings)
             g.addWidget(cb, r, 0, 1, 3)
             r += 1
 
-        hint = QLabel("Make a webhook in any Discord server: channel settings > "
-                      "Integrations > Webhooks. Notifications arrive on your phone "
-                      "through the Discord app.")
+        hint = QLabel("To get a webhook link: in any Discord server you own, "
+                      "right-click a channel > Edit Channel > Integrations > "
+                      "Webhooks > New Webhook > Copy URL. Paste it above and "
+                      "hit Test - the message shows up in that channel, and "
+                      "on your phone if you have the Discord app.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         g.addWidget(hint, r, 0, 1, 4)
@@ -438,8 +452,8 @@ class MainWindow(QMainWindow):
 
     def _step_item(self, s: Step) -> QListWidgetItem:
         state = "" if s.enabled else "  (off)"
-        img = "" if s.template else "  [no image]"
-        act = "click" if s.click else "watch"
+        img = "" if s.template else "  -  needs a capture"
+        act = "watch + click" if s.click else "watch only"
         item = QListWidgetItem(f"{s.name}  -  {act}{img}{state}")
         return item
 
@@ -472,7 +486,8 @@ class MainWindow(QMainWindow):
             self.ed_click.setChecked(s.click)
             self.ed_post.setValue(s.post_delay)
             self.ed_timeout.setValue(s.timeout)
-            self.ed_on_timeout.setCurrentText(s.on_timeout)
+            idx = self.ed_on_timeout.findData(s.on_timeout)
+            self.ed_on_timeout.setCurrentIndex(max(0, idx))
             self.ed_enabled.setChecked(s.enabled)
             self._show_thumb(s)
         else:
@@ -500,7 +515,7 @@ class MainWindow(QMainWindow):
         s.click = self.ed_click.isChecked()
         s.post_delay = self.ed_post.value()
         s.timeout = self.ed_timeout.value()
-        s.on_timeout = self.ed_on_timeout.currentText()
+        s.on_timeout = self.ed_on_timeout.currentData()
         s.enabled = self.ed_enabled.isChecked()
         self._refresh_step_row(self.step_list.currentRow())
 
@@ -665,8 +680,15 @@ class MainWindow(QMainWindow):
         self.log(f"Saved -> {path}")
 
     def _delete_profile(self) -> None:
-        if QMessageBox.question(self, "Delete", f"Delete profile "
-                                f"'{self.profile.name}'?") != QMessageBox.Yes:
+        box = QMessageBox(self)
+        box.setWindowTitle("Delete profile")
+        box.setText(f"Delete the profile '{self.profile.name}'?\n\n"
+                    "Its captured images and settings go with it. "
+                    "This can't be undone.")
+        delete_btn = box.addButton("Delete profile", QMessageBox.DestructiveRole)
+        box.addButton("Keep it", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is not delete_btn:
             return
         self.profile.path.unlink(missing_ok=True)
         paths = Profile.list_all()
@@ -736,7 +758,7 @@ class MainWindow(QMainWindow):
     def _on_engine_stopped(self, reason: str) -> None:
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
-        self.state_label.setText("Idle")
+        self.state_label.setText("Not running")
         self._highlight_step(-1)
         self._refresh_guide()
         if reason:

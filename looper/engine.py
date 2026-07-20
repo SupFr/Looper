@@ -93,40 +93,44 @@ class LoopEngine(QThread):
         p = self.p
         steps = [s for s in p.steps if s.enabled and s.template and s.has_region]
         if not steps:
-            self.sig_stopped.emit("No usable steps - capture at least one image.")
+            self.sig_stopped.emit("Nothing to watch for yet - capture the end "
+                                  "screen first (step 1 in the setup guide).")
             return
 
         mp = player.MacroPlayer(p, self._log)
         self.hook.mark_start()
         if p.webhook_on_start:
-            self.hook.send("Loop started", f"Profile: **{p.name}**",
+            self.hook.send("Farm started", f"Profile: **{p.name}**",
                            webhook.COLOR_START)
         reason = ""
         try:
-            self.sig_state.emit("Preparing")
+            self.sig_state.emit("Getting ready")
             mp.prepare()
 
             # First playback: user starts the loop sitting inside a match, or
             # right where the macro expects to begin.
             if not self._sleep(p.pre_playback_delay):
                 return
-            self.sig_state.emit("Playing macro")
+            self.sig_state.emit("Playing your macro")
             mp.start_playback()
 
             while not self._abort:
                 # -- wait for the end screen (step 1) -----------------
-                self.sig_state.emit(f"Watching: {steps[0].name}")
+                self.sig_state.emit(f"Watching for: {steps[0].name}")
                 outcome = self._watch_first(steps[0], mp)
                 if outcome == "abort":
                     break
                 if outcome == "stop":
-                    reason = f"Step '{steps[0].name}' timed out (on_timeout=stop)."
+                    reason = (f"'{steps[0].name}' never showed up on screen, "
+                              "so the loop stopped (that's what you chose for "
+                              "this step). If the game looks different now, "
+                              "re-capture the image.")
                     break
 
                 # -- remaining navigation steps -----------------------
                 restart = False
                 for i, step in enumerate(steps[1:], start=1):
-                    self.sig_state.emit(f"Watching: {step.name}")
+                    self.sig_state.emit(f"Watching for: {step.name}")
                     out = self._watch(step, i)
                     if out == "abort":
                         break
@@ -135,7 +139,10 @@ class LoopEngine(QThread):
                         if step.on_timeout == config.ON_TIMEOUT_SKIP:
                             continue
                         if step.on_timeout == config.ON_TIMEOUT_STOP:
-                            reason = f"Step '{step.name}' timed out."
+                            reason = (f"'{step.name}' never showed up on "
+                                      "screen, so the loop stopped. If the "
+                                      "game looks different now, re-capture "
+                                      "the image for that step.")
                             self._abort = True
                             break
                         restart = True   # ON_TIMEOUT_RESTART
@@ -146,18 +153,18 @@ class LoopEngine(QThread):
                 self._cycles += 1
                 self.sig_cycle.emit(self._cycles)
                 if restart:
-                    self._log("Restarting cycle from step 1.")
+                    self._log("Starting over from step 1.")
 
                 if (p.webhook_on_cycle and p.webhook_every > 0
                         and self._cycles % p.webhook_every == 0):
-                    self.hook.send("Cycle complete", "", webhook.COLOR_CYCLE,
-                                   {"Profile": p.name, "Cycles": self._cycles})
+                    self.hook.send("Match finished", "", webhook.COLOR_CYCLE,
+                                   {"Profile": p.name, "Matches": self._cycles})
 
                 # -- relaunch the macro -------------------------------
-                self.sig_state.emit("Waiting for match load")
+                self.sig_state.emit("Waiting for the match to load")
                 if not self._sleep(p.pre_playback_delay):
                     break
-                self.sig_state.emit("Playing macro")
+                self.sig_state.emit("Playing your macro")
                 mp.start_playback()
 
         except FileNotFoundError as e:
@@ -168,11 +175,12 @@ class LoopEngine(QThread):
             self.sig_step.emit(-1)
             mp.shutdown()
             if reason and p.webhook_on_error:
-                self.hook.send("Loop stopped with error", reason, webhook.COLOR_ERROR,
-                               {"Profile": p.name, "Cycles": self._cycles})
+                self.hook.send("Farm stopped - needs your attention", reason,
+                               webhook.COLOR_ERROR,
+                               {"Profile": p.name, "Matches": self._cycles})
             elif p.webhook_on_stop:
-                self.hook.send("Loop stopped", "", webhook.COLOR_STOP,
-                               {"Profile": p.name, "Cycles": self._cycles})
+                self.hook.send("Farm stopped", "", webhook.COLOR_STOP,
+                               {"Profile": p.name, "Matches": self._cycles})
             self.sig_stopped.emit(reason)
 
     def _watch_first(self, step: config.Step, mp: player.MacroPlayer) -> str:

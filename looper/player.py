@@ -79,16 +79,21 @@ class MacroPlayer:
             return
         player = self.p.player_path.strip()
         if not player:
-            self.log("No player app set - assuming it is already open.")
+            self.log("No player app chosen - assuming you already have it open.")
             return
         if not Path(player).is_file():
-            raise FileNotFoundError(f"Player app not found: {player}")
+            raise FileNotFoundError(
+                f"Can't find the player app at:\n{player}\n\n"
+                "It may have moved. Pick it again in the Playback tab.")
 
         args = [player]
         macro = self.p.macro_file.strip()
         if macro:
             if not Path(macro).is_file():
-                raise FileNotFoundError(f"Macro file not found: {macro}")
+                raise FileNotFoundError(
+                    f"Can't find your macro recording at:\n{macro}\n\n"
+                    "It may have moved or been renamed. Pick it again in "
+                    "the Playback tab.")
             args.append(macro)
 
         self._player_proc = subprocess.Popen(args)
@@ -102,7 +107,10 @@ class MacroPlayer:
         if self.p.mode == config.MODE_STANDALONE:
             macro = self.p.macro_file.strip()
             if not Path(macro).is_file():
-                raise FileNotFoundError(f"Macro exe not found: {macro}")
+                raise FileNotFoundError(
+                    f"Can't find your macro program at:\n{macro}\n\n"
+                    "It may have moved or been renamed. Pick it again in "
+                    "the Playback tab.")
             self._proc = subprocess.Popen([macro])
             self.log(f"Playback started ({Path(macro).name})")
         else:
