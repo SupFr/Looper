@@ -27,6 +27,7 @@ class LoopEngine(QThread):
     sig_state = Signal(str)          # human-readable current state
     sig_cycle = Signal(int)          # completed cycle count
     sig_step = Signal(int)           # index of step being watched, -1 = none
+    sig_result = Signal(int, int)    # running (wins, losses) tally
     sig_stopped = Signal(str)        # reason ("" = user stop)
 
     def __init__(self, profile: config.Profile, hook: webhook.Webhook) -> None:
@@ -35,7 +36,34 @@ class LoopEngine(QThread):
         self.hook = hook
         self._abort = False
         self._cycles = 0
+        self._wins = 0
+        self._losses = 0
         self._cache = matcher.TemplateCache()
+
+    def _check_result(self) -> str:
+        """On the end screen, decide win / loss / unknown from templates."""
+        p = self.p
+
+        def hit(tpl_path: str, region: list[int]) -> float:
+            if not tpl_path or region[2] <= 0:
+                return -1.0
+            tpl = self._cache.get(tpl_path, p.grayscale)
+            if tpl is None:
+                return -1.0
+            reg = {"left": region[0], "top": region[1],
+                   "width": region[2], "height": region[3]}
+            frame = capture.grab(reg)
+            res = matcher.find(frame, tpl, p.result_threshold,
+                               (region[0], region[1]), p.grayscale)
+            return res.confidence if res.found else -1.0
+
+        win = hit(p.win_template, p.win_region)
+        loss = hit(p.loss_template, p.loss_region)
+        if win < 0 and loss < 0:
+            return "unknown"
+        if win >= loss:
+            return "win"
+        return "loss"
 
     # -- control ---------------------------------------------------------
     def stop(self) -> None:
@@ -165,6 +193,17 @@ class LoopEngine(QThread):
                               "re-capture the image.")
                     break
 
+                # -- win / loss (end screen is up, Retry not clicked yet) --
+                result = self._check_result()
+                if result == "win":
+                    self._wins += 1
+                    self._log("Result: WON")
+                elif result == "loss":
+                    self._losses += 1
+                    self._log("Result: lost")
+                if result != "unknown":
+                    self.sig_result.emit(self._wins, self._losses)
+
                 # -- remaining navigation steps -----------------------
                 restart = False
                 for i, step in enumerate(steps[1:], start=1):
@@ -195,8 +234,18 @@ class LoopEngine(QThread):
 
                 if (p.webhook_on_cycle and p.webhook_every > 0
                         and self._cycles % p.webhook_every == 0):
-                    self.hook.send("Match finished", "", webhook.COLOR_CYCLE,
-                                   {"Profile": p.name, "Matches": self._cycles})
+                    fields = {"Profile": p.name, "Matches": self._cycles}
+                    title = "Match finished"
+                    color = webhook.COLOR_CYCLE
+                    if result == "win":
+                        title = "Match won ✅"
+                        color = webhook.COLOR_START
+                    elif result == "loss":
+                        title = "Match lost ❌"
+                        color = webhook.COLOR_ERROR
+                    if self._wins or self._losses:
+                        fields["Record"] = f"{self._wins}W / {self._losses}L"
+                    self.hook.send(title, "", color, fields)
 
                 # -- relaunch the macro -------------------------------
                 self.sig_state.emit("Waiting for the match to load")

@@ -78,6 +78,19 @@ class Profile:
     poll_interval: float = 0.4
     grayscale: bool = True
 
+    # --- reference photos (shown when the recording is selected) -------
+    # One-time stills so the player knows what to equip before farming.
+    ref_units: str = ""      # abs path to the team/units screenshot
+    ref_act: str = ""        # abs path to the act-info screenshot
+
+    # --- win / loss detection (optional) ------------------------------
+    # Checked on the end screen; result goes to the counter + webhook.
+    win_template: str = ""
+    win_region: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
+    loss_template: str = ""
+    loss_region: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
+    result_threshold: float = 0.85
+
     # --- global hotkeys -----------------------------------------------
     hk_start: str = "<f9>"
     hk_stop: str = "<f10>"

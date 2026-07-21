@@ -1,4 +1,4 @@
-# Looper v1.4
+# Looper v1.5
 
 Vision-driven macro loop supervisor. Wraps any recorded macro (TinyTask,
 Informaal, a compiled .exe) in a closed loop: it watches the screen for the
@@ -54,9 +54,20 @@ play macro ──► watch for end screen ──► stop playback ──► clic
 - Every step has a timeout with a chosen fallback (restart cycle / skip
   step / stop + notify), so a missed popup can't hang the farm forever.
 
+## Reference photos & win/loss
+
+- **Your setup for this recording** (shown on the main window): capture one
+  photo of your team and one of the act info. They're pinned to the profile
+  so next time you open it you know exactly what to equip. Click a photo to
+  enlarge it.
+- **Win / Loss tab**: optionally capture what a "Victory" and "Defeat" look
+  like (a small, always-the-same crop of each end screen). Looper then keeps
+  a W/L record on the status block and reports the result in each Discord
+  message.
+
 ## Notes
 
-- Templates and profiles live in `%APPDATA%\Looper\`.
+- Templates, photos, and profiles live in `%APPDATA%\Looper\`.
 - Multiple profiles = multiple games; switch from the dropdown.
 - Keep the game at the same resolution/position it had when you captured
   the regions — template matching is pixel-scale sensitive.

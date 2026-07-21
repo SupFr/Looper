@@ -44,6 +44,7 @@ QFrame#hero[mode="error"]   QLabel#heroState { color: #e06c5b; }
 QLabel#heroCount { font-size: 44px; font-weight: 800; color: #f2ece4; }
 QFrame#hero[mode="running"] QLabel#heroCount { color: #5fbf74; }
 QLabel#heroCountCaption { color: #b3a698; font-size: 12px; }
+QLabel#heroRecord { color: #b3a698; font-size: 14px; font-weight: 600; margin-right: 14px; }
 
 /* ---------- buttons ---------- */
 

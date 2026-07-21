@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QLineEdit, QComboBox, QCheckBox, QDoubleSpinBox,
     QSpinBox, QListWidget, QListWidgetItem, QPlainTextEdit, QTabWidget,
     QFileDialog, QMessageBox, QInputDialog, QSplitter, QKeySequenceEdit,
+    QDialog,
 )
 
 import re
@@ -77,7 +78,7 @@ class HotkeyEdit(QKeySequenceEdit):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Looper v1.4")
+        self.setWindowTitle("Looper v1.5")
         self.setMinimumSize(760, 420)
         self.resize(1060, 700)
 
@@ -120,6 +121,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.guide)
 
         outer.addWidget(self._build_hero())
+        outer.addWidget(self._build_reference())
 
         # Everything below the hero is the "tinker" face: hidden by default
         # so a friend's first sight is guide + status + Start, nothing else.
@@ -162,6 +164,12 @@ class MainWindow(QMainWindow):
         self.state_label.setObjectName("heroState")
         lay.addWidget(self.state_label, 1)
 
+        self.record_label = QLabel("")
+        self.record_label.setObjectName("heroRecord")
+        self.record_label.setAlignment(Qt.AlignRight | Qt.AlignBottom)
+        self.record_label.hide()
+        lay.addWidget(self.record_label)
+
         right = QVBoxLayout()
         right.setSpacing(0)
         self.cycle_label = QLabel("0")
@@ -177,6 +185,85 @@ class MainWindow(QMainWindow):
         self.hero = hero
         return hero
 
+    def _on_result(self, wins: int, losses: int) -> None:
+        self.record_label.setText(f"{wins}W · {losses}L")
+        self.record_label.show()
+
+    def _build_reference(self) -> QFrame:
+        """Two one-time photos so the player equips the right team before
+        farming. Shown for whichever recording is selected."""
+        panel = _panel()
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(8)
+
+        head = QLabel("YOUR SETUP FOR THIS RECORDING")
+        head.setObjectName("h2")
+        lay.addWidget(head)
+
+        hint = QLabel("Take one photo of your team and one of the act info, so "
+                      "next time you open this recording you know exactly what "
+                      "to equip and where.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        row = QHBoxLayout()
+        row.setSpacing(16)
+        self._ref_thumbs: dict[str, QLabel] = {}
+        for which, caption in (("units", "Your team"), ("act", "Act info")):
+            col = QVBoxLayout()
+            col.setSpacing(4)
+            cap = QLabel(caption)
+            cap.setStyleSheet("font-weight: 600;")
+            col.addWidget(cap)
+
+            thumb = QLabel("not taken yet")
+            thumb.setObjectName("thumb")
+            thumb.setFixedSize(QSize(220, 124))
+            thumb.setAlignment(Qt.AlignCenter)
+            thumb.setCursor(Qt.PointingHandCursor)
+            thumb.mousePressEvent = lambda e, w=which: self._enlarge_reference(w)
+            self._ref_thumbs[which] = thumb
+            col.addWidget(thumb)
+
+            btn = QPushButton(f"Capture {caption.lower()}")
+            btn.clicked.connect(lambda _=False, w=which: self._capture_reference(w))
+            col.addWidget(btn)
+            row.addLayout(col)
+        row.addStretch(1)
+        lay.addLayout(row)
+
+        self._reference_panel = panel
+        return panel
+
+    def _refresh_reference(self) -> None:
+        for which, thumb in self._ref_thumbs.items():
+            path = getattr(self.profile, f"ref_{which}")
+            if path and Path(path).is_file():
+                pm = QPixmap(path)
+                thumb.setPixmap(pm.scaled(thumb.size(), Qt.KeepAspectRatio,
+                                          Qt.SmoothTransformation))
+            else:
+                thumb.setPixmap(QPixmap())
+                thumb.setText("not taken yet")
+
+    def _enlarge_reference(self, which: str) -> None:
+        path = getattr(self.profile, f"ref_{which}")
+        if not (path and Path(path).is_file()):
+            self._capture_reference(which)
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Your team" if which == "units" else "Act info")
+        v = QVBoxLayout(dlg)
+        img = QLabel()
+        pm = QPixmap(path)
+        if pm.width() > 1000:
+            pm = pm.scaledToWidth(1000, Qt.SmoothTransformation)
+        img.setPixmap(pm)
+        v.addWidget(img)
+        dlg.exec()
+
     def _set_hero_mode(self, mode: str) -> None:
         self.hero.setProperty("mode", mode)
         self.hero.style().unpolish(self.hero)
@@ -191,7 +278,7 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(
                 f"Looper - {self.cycle_label.text()} matches - running")
         else:
-            self.setWindowTitle("Looper v1.4")
+            self.setWindowTitle("Looper v1.5")
 
     def _build_header(self) -> QFrame:
         panel = _panel()
@@ -335,9 +422,56 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.addTab(self._tab_playback(), "Playback")
         tabs.addTab(self._tab_hotkeys(), "Hotkeys")
+        tabs.addTab(self._tab_result(), "Win / Loss")
         tabs.addTab(self._tab_webhook(), "Webhook")
         lay.addWidget(tabs)
         return panel
+
+    def _tab_result(self) -> QWidget:
+        w = QWidget()
+        g = QGridLayout(w)
+        g.setVerticalSpacing(8)
+        r = 0
+
+        intro = QLabel("Optional. Show Looper what a win and a loss look like "
+                       "and it'll keep score - and say which you got in the "
+                       "Discord message. Capture a small, always-the-same part "
+                       "of each end screen (the 'Victory' or 'Defeat' word is "
+                       "perfect). Skip anything with changing numbers.")
+        intro.setObjectName("hint")
+        intro.setWordWrap(True)
+        g.addWidget(intro, r, 0, 1, 3)
+        r += 1
+
+        for which, word in (("win", "win"), ("loss", "loss")):
+            btn = QPushButton(f"Capture what a {word} looks like")
+            btn.clicked.connect(lambda _=False, k=which: self._capture_result(k))
+            g.addWidget(btn, r, 0, 1, 2)
+            lbl = QLabel("not set")
+            lbl.setObjectName("hint")
+            setattr(self, f"_result_lbl_{which}", lbl)
+            g.addWidget(lbl, r, 2)
+            r += 1
+
+        g.addWidget(QLabel("Match strictness"), r, 0)
+        self.res_threshold = QDoubleSpinBox(minimum=0.5, maximum=1.0,
+                                            singleStep=0.01, decimals=2)
+        self.res_threshold.setToolTip("Lower it a little if Looper mixes up "
+                                      "wins and losses.")
+        self.res_threshold.valueChanged.connect(self._apply_settings)
+        g.addWidget(self.res_threshold, r, 1)
+        r += 1
+
+        g.setRowStretch(r, 1)
+        return w
+
+    def _refresh_result_labels(self) -> None:
+        for which in ("win", "loss"):
+            lbl = getattr(self, f"_result_lbl_{which}", None)
+            if lbl is None:
+                continue
+            tpl = getattr(self.profile, f"{which}_template")
+            lbl.setText("captured ✓" if tpl and Path(tpl).is_file() else "not set")
 
     def _tab_playback(self) -> QWidget:
         w = QWidget()
@@ -554,8 +688,13 @@ class MainWindow(QMainWindow):
             self.wh_stop.setChecked(p.webhook_on_stop)
             self.wh_err.setChecked(p.webhook_on_error)
 
+            self.res_threshold.setValue(p.result_threshold)
+
         self._step_to_editor()
         self._refresh_guide()
+        self._refresh_reference()
+        self._refresh_result_labels()
+        self.record_label.hide()
 
     def _step_item(self, s: Step) -> QListWidgetItem:
         state = "" if s.enabled else "  (off)"
@@ -656,6 +795,7 @@ class MainWindow(QMainWindow):
         p.webhook_on_start = self.wh_start.isChecked()
         p.webhook_on_stop = self.wh_stop.isChecked()
         p.webhook_on_error = self.wh_err.isChecked()
+        p.result_threshold = self.res_threshold.value()
         self._refresh_guide()
 
     @contextmanager
@@ -773,14 +913,19 @@ class MainWindow(QMainWindow):
         self._refresh_step_row(new)
         self.step_list.setCurrentRow(new)
 
-    def _capture_region(self) -> None:
-        s = self._current_step()
-        if not s:
-            return
+    def _capture(self, handler) -> None:
+        """Hide the window, let the user drag a region, hand the result to
+        `handler(region_dict, image_bgr)`. Shared by steps, reference photos,
+        and win/loss templates."""
+        self._pick_handler = handler
         self.hide()
-        # give the window time to actually leave the screen
         from PySide6.QtCore import QTimer
         QTimer.singleShot(350, self._launch_picker)
+
+    def _capture_region(self) -> None:
+        if not self._current_step():
+            return
+        self._capture(self._store_step_capture)
 
     def _launch_picker(self) -> None:
         self._picker = overlay.RegionPicker()
@@ -790,6 +935,11 @@ class MainWindow(QMainWindow):
 
     def _on_region_picked(self, region: dict, template: np.ndarray) -> None:
         self.show()
+        handler = getattr(self, "_pick_handler", None)
+        if handler:
+            handler(region, template)
+
+    def _store_step_capture(self, region: dict, template: np.ndarray) -> None:
         s = self._current_step()
         if not s:
             return
@@ -805,6 +955,28 @@ class MainWindow(QMainWindow):
 
     def _on_pick_cancelled(self) -> None:
         self.show()
+
+    # -- reference photos + win/loss captures --
+    def _capture_reference(self, which: str) -> None:
+        def store(region: dict, image: np.ndarray) -> None:
+            path = str(config.new_asset_path())
+            matcher.save_png(path, image)
+            setattr(self.profile, f"ref_{which}", path)
+            self._refresh_reference()
+            self.log(f"Saved your {which} photo for this recording.")
+        self._capture(store)
+
+    def _capture_result(self, which: str) -> None:
+        def store(region: dict, image: np.ndarray) -> None:
+            path = str(config.new_asset_path())
+            matcher.save_png(path, image)
+            setattr(self.profile, f"{which}_template", path)
+            setattr(self.profile, f"{which}_region",
+                    [region["left"], region["top"], region["width"], region["height"]])
+            self._refresh_result_labels()
+            label = "win" if which == "win" else "loss"
+            self.log(f"Captured what a {label} looks like.")
+        self._capture(store)
 
     # -- profiles --
     def _on_profile_switch(self, name: str) -> None:
@@ -893,6 +1065,7 @@ class MainWindow(QMainWindow):
         self.engine.sig_state.connect(self.state_label.setText)
         self.engine.sig_cycle.connect(self._on_cycle)
         self.engine.sig_step.connect(self._highlight_step)
+        self.engine.sig_result.connect(self._on_result)
         self.engine.sig_stopped.connect(self._on_engine_stopped)
         self.engine.start()
 
@@ -900,6 +1073,7 @@ class MainWindow(QMainWindow):
         self.btn_stop.setEnabled(True)
         self._set_profile_controls(False)
         self.cycle_label.setText("0")
+        self.record_label.hide()
         self._set_hero_mode("running")
         self._update_title()
         self.log("=== Loop started ===")
