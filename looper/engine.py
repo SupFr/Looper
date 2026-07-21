@@ -40,30 +40,58 @@ class LoopEngine(QThread):
         self._losses = 0
         self._cache = matcher.TemplateCache()
 
+    def _locate(self, tpl_path: str, region: list[int], base: list[int],
+                threshold: float) -> matcher.MatchResult:
+        """Find a template on screen, correcting for a resolution change since
+        capture. If the current screen is a different size than the one the
+        template was captured on, the search area and the template are scaled
+        to match, with a small sweep to absorb non-linear UI scaling."""
+        tpl = self._cache.get(tpl_path, self.p.grayscale)
+        if tpl is None or region[2] <= 0:
+            return matcher.MatchResult(False, 0.0, None)
+
+        x, y, w, h = region
+        desk = capture.virtual_desktop()
+        cur_w, cur_h = desk["width"], desk["height"]
+        scales = (1.0,)
+
+        if base and base[0] and base[1] and (base[0] != cur_w or base[1] != cur_h):
+            sx, sy = cur_w / base[0], cur_h / base[1]
+            s = (sx + sy) / 2.0
+            # element moved to a scaled position and grew/shrank; grab a
+            # padded area around where it should now be so we can't miss it
+            cx, cy = (x + w / 2) * sx, (y + h / 2) * sy
+            gw, gh = w * sx * 2, h * sy * 2
+            gx, gy = cx - gw / 2, cy - gh / 2
+            left = max(desk["left"], int(gx))
+            top = max(desk["top"], int(gy))
+            grab = {
+                "left": left, "top": top,
+                "width": min(int(gw), desk["left"] + cur_w - left),
+                "height": min(int(gh), desk["top"] + cur_h - top),
+            }
+            scales = (s * 0.9, s, s * 1.1)
+        else:
+            grab = {"left": x, "top": y, "width": w, "height": h}
+
+        if grab["width"] <= 0 or grab["height"] <= 0:
+            return matcher.MatchResult(False, 0.0, None)
+        frame = capture.grab(grab)
+        return matcher.find(frame, tpl, threshold,
+                            (grab["left"], grab["top"]), self.p.grayscale, scales)
+
     def _check_result(self) -> str:
         """On the end screen, decide win / loss / unknown from templates."""
         p = self.p
-
-        def hit(tpl_path: str, region: list[int]) -> float:
-            if not tpl_path or region[2] <= 0:
-                return -1.0
-            tpl = self._cache.get(tpl_path, p.grayscale)
-            if tpl is None:
-                return -1.0
-            reg = {"left": region[0], "top": region[1],
-                   "width": region[2], "height": region[3]}
-            frame = capture.grab(reg)
-            res = matcher.find(frame, tpl, p.result_threshold,
-                               (region[0], region[1]), p.grayscale)
-            return res.confidence if res.found else -1.0
-
-        win = hit(p.win_template, p.win_region)
-        loss = hit(p.loss_template, p.loss_region)
+        win_r = self._locate(p.win_template, p.win_region, p.win_base,
+                             p.result_threshold)
+        loss_r = self._locate(p.loss_template, p.loss_region, p.loss_base,
+                              p.result_threshold)
+        win = win_r.confidence if win_r.found else -1.0
+        loss = loss_r.confidence if loss_r.found else -1.0
         if win < 0 and loss < 0:
             return "unknown"
-        if win >= loss:
-            return "win"
-        return "loss"
+        return "win" if win >= loss else "loss"
 
     # -- control ---------------------------------------------------------
     def stop(self) -> None:
@@ -87,19 +115,16 @@ class LoopEngine(QThread):
 
         Returns 'match' | 'timeout' | 'abort'.
         """
-        tpl = self._cache.get(step.template, self.p.grayscale)
-        if tpl is None:
+        if self._cache.get(step.template, self.p.grayscale) is None:
             self._log(f"[{step.name}] template missing: {step.template}")
             return "timeout"
 
         self.sig_step.emit(idx)
-        region = step.region_dict
-        origin = (region["left"], region["top"])
         deadline = (time.monotonic() + step.timeout) if step.timeout > 0 else None
 
         while not self._abort:
-            frame = capture.grab(region)
-            res = matcher.find(frame, tpl, step.threshold, origin, self.p.grayscale)
+            res = self._locate(step.template, step.region, step.base,
+                               step.threshold)
             if res.found:
                 self._log(f"[{step.name}] matched ({res.confidence:.2f})")
                 if step.click and res.center:
@@ -135,14 +160,21 @@ class LoopEngine(QThread):
                 return (f"The captured image for '{s.name}' can't be read - "
                         "it may be corrupted. Select the step and capture "
                         "it again.")
-            x, y, w, h = s.region
-            if (x < desk["left"] or y < desk["top"]
-                    or x + w > desk["left"] + desk["width"]
-                    or y + h > desk["top"] + desk["height"]):
-                return (f"The screen area for '{s.name}' is outside your "
-                        "current display. Your screen setup (resolution or "
-                        "monitors) changed since you captured it - select "
-                        "the step and capture it again.")
+            # A resolution change is fine now - _locate rescales the region -
+            # as long as we know what resolution it was captured at. Only
+            # fail when we can't rescale (legacy capture, no stored base) and
+            # the region falls outside the current screen.
+            resized = s.base and s.base[0] and s.base[1] and (
+                s.base[0] != desk["width"] or s.base[1] != desk["height"])
+            if not resized:
+                x, y, w, h = s.region
+                if (x < desk["left"] or y < desk["top"]
+                        or x + w > desk["left"] + desk["width"]
+                        or y + h > desk["top"] + desk["height"]):
+                    return (f"The screen area for '{s.name}' is outside your "
+                            "current display. Your screen setup (resolution or "
+                            "monitors) changed since you captured it - select "
+                            "the step and capture it again.")
 
         if self.p.mode == config.MODE_PLAYER:
             for label, spec in (("play", self.p.play_hotkey),
@@ -279,18 +311,15 @@ class LoopEngine(QThread):
 
         Returns 'ok' | 'stop' | 'abort'.
         """
-        tpl = self._cache.get(step.template, self.p.grayscale)
-        if tpl is None:
+        if self._cache.get(step.template, self.p.grayscale) is None:
             return "stop"
 
         self.sig_step.emit(0)
-        region = step.region_dict
-        origin = (region["left"], region["top"])
         deadline = (time.monotonic() + step.timeout) if step.timeout > 0 else None
 
         while not self._abort:
-            frame = capture.grab(region)
-            res = matcher.find(frame, tpl, step.threshold, origin, self.p.grayscale)
+            res = self._locate(step.template, step.region, step.base,
+                               step.threshold)
             if res.found:
                 self._log(f"[{step.name}] end screen ({res.confidence:.2f})")
                 if self.p.stop_before_steps:

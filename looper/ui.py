@@ -20,7 +20,8 @@ from PySide6.QtWidgets import (
 import re
 from pathlib import PurePath
 
-from . import config, engine, hotkeys, matcher, onboarding, overlay, player, webhook
+from . import (config, capture, engine, hotkeys, matcher, onboarding,
+               overlay, player, webhook)
 from .config import Profile, Step
 
 
@@ -78,7 +79,7 @@ class HotkeyEdit(QKeySequenceEdit):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Looper v1.5")
+        self.setWindowTitle("Looper v1.6")
         self.setMinimumSize(760, 420)
         self.resize(1060, 700)
 
@@ -278,7 +279,7 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(
                 f"Looper - {self.cycle_label.text()} matches - running")
         else:
-            self.setWindowTitle("Looper v1.5")
+            self.setWindowTitle("Looper v1.6")
 
     def _build_header(self) -> QFrame:
         panel = _panel()
@@ -947,6 +948,8 @@ class MainWindow(QMainWindow):
         matcher.save_png(path, template)
         s.template = path
         s.region = [region["left"], region["top"], region["width"], region["height"]]
+        desk = capture.virtual_desktop()
+        s.base = [desk["width"], desk["height"]]
         self._show_thumb(s)
         self._refresh_step_row(self.step_list.currentRow())
         self.log(f"[{s.name}] captured {region['width']}x{region['height']}px "
@@ -970,9 +973,11 @@ class MainWindow(QMainWindow):
         def store(region: dict, image: np.ndarray) -> None:
             path = str(config.new_asset_path())
             matcher.save_png(path, image)
+            desk = capture.virtual_desktop()
             setattr(self.profile, f"{which}_template", path)
             setattr(self.profile, f"{which}_region",
                     [region["left"], region["top"], region["width"], region["height"]])
+            setattr(self.profile, f"{which}_base", [desk["width"], desk["height"]])
             self._refresh_result_labels()
             label = "win" if which == "win" else "loss"
             self.log(f"Captured what a {label} looks like.")

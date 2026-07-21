@@ -50,22 +50,42 @@ class TemplateCache:
 
 
 def find(frame: np.ndarray, template: np.ndarray, threshold: float,
-         origin: tuple[int, int], grayscale: bool) -> MatchResult:
-    """Locate `template` inside `frame`. `origin` is the frame's screen offset."""
+         origin: tuple[int, int], grayscale: bool,
+         scales: tuple[float, ...] = (1.0,)) -> MatchResult:
+    """Locate `template` inside `frame`. `origin` is the frame's screen offset.
+
+    `scales` resizes the template before matching -- pass a sweep like
+    (0.9, 1.0, 1.1) so a template captured at one screen resolution still
+    matches at another. Best scale wins.
+    """
     if grayscale and frame.ndim == 3:
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     fh, fw = frame.shape[:2]
-    th, tw = template.shape[:2]
-    if th > fh or tw > fw:
-        return MatchResult(False, 0.0, None)
+    best_val = -1.0
+    best_loc = None
+    best_tw = best_th = 0
+    for sc in scales:
+        if sc == 1.0:
+            tpl = template
+        else:
+            th0, tw0 = template.shape[:2]
+            nw, nh = max(1, round(tw0 * sc)), max(1, round(th0 * sc))
+            interp = cv2.INTER_AREA if sc < 1.0 else cv2.INTER_LINEAR
+            tpl = cv2.resize(template, (nw, nh), interpolation=interp)
+        th, tw = tpl.shape[:2]
+        if th > fh or tw > fw:
+            continue
+        res = cv2.matchTemplate(frame, tpl, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        if max_val > best_val:
+            best_val, best_loc, best_tw, best_th = max_val, max_loc, tw, th
 
-    res = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
-    _, max_val, _, max_loc = cv2.minMaxLoc(res)
+    if best_loc is None or best_val < threshold:
+        return MatchResult(False, float(max(best_val, 0.0)), None)
 
-    if max_val < threshold:
-        return MatchResult(False, float(max_val), None)
-
+    max_loc, tw, th = best_loc, best_tw, best_th
+    max_val = best_val
     cx = origin[0] + max_loc[0] + tw // 2
     cy = origin[1] + max_loc[1] + th // 2
     return MatchResult(True, float(max_val), (cx, cy))

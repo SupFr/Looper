@@ -39,6 +39,7 @@ class Step:
     name: str = "New step"
     template: str = ""                       # abs path to the captured .png
     region: list[int] = field(default_factory=lambda: [0, 0, 0, 0])  # physical px
+    base: list[int] = field(default_factory=lambda: [0, 0])  # desktop w,h at capture
     threshold: float = 0.85
     click: bool = True
     click_offset: list[int] = field(default_factory=lambda: [0, 0])
@@ -87,8 +88,10 @@ class Profile:
     # Checked on the end screen; result goes to the counter + webhook.
     win_template: str = ""
     win_region: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
+    win_base: list[int] = field(default_factory=lambda: [0, 0])
     loss_template: str = ""
     loss_region: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
+    loss_base: list[int] = field(default_factory=lambda: [0, 0])
     result_threshold: float = 0.85
 
     # --- global hotkeys -----------------------------------------------

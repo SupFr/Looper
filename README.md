@@ -1,4 +1,4 @@
-# Looper v1.5
+# Looper v1.6
 
 Vision-driven macro loop supervisor. Wraps any recorded macro (TinyTask,
 Informaal, a compiled .exe) in a closed loop: it watches the screen for the
@@ -69,5 +69,8 @@ play macro ──► watch for end screen ──► stop playback ──► clic
 
 - Templates, photos, and profiles live in `%APPDATA%\Looper\`.
 - Multiple profiles = multiple games; switch from the dropdown.
-- Keep the game at the same resolution/position it had when you captured
-  the regions — template matching is pixel-scale sensitive.
+- Looper records the screen resolution when you capture, and auto-scales
+  the search area and image if you later play at a different resolution
+  (e.g. captured at 1920×1080, running at 2560×1440). Same-aspect changes
+  (16:9) are handled; a very different aspect ratio may still need a
+  re-capture.
