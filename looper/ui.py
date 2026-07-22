@@ -79,7 +79,7 @@ class HotkeyEdit(QKeySequenceEdit):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Looper v1.6")
+        self.setWindowTitle("Looper v1.7")
         self.setMinimumSize(760, 420)
         self.resize(1060, 700)
 
@@ -100,6 +100,38 @@ class MainWindow(QMainWindow):
         self.hk.sig_start.connect(self.start_loop)
         self.hk.sig_stop.connect(self.stop_loop)
         self.hk.sig_panic.connect(self.panic)
+
+        self._dark_titlebar_done = False
+        if onboarding.always_on_top():
+            self.btn_pin.setChecked(True)
+
+    # -- native window chrome ------------------------------------------
+    def _apply_dark_titlebar(self) -> None:
+        """Windows keeps a light title bar unless we opt into dark mode via
+        DWM. Native controls (min/max/close, snap, drag) all stay."""
+        try:
+            import ctypes
+            hwnd = int(self.winId())
+            for attr in (20, 19):   # 20 = Win11+, 19 = older Win10 builds
+                val = ctypes.c_int(1)
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, attr, ctypes.byref(val), ctypes.sizeof(val))
+        except Exception:
+            pass
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not self._dark_titlebar_done:
+            self._dark_titlebar_done = True
+            self._apply_dark_titlebar()
+
+    def _toggle_on_top(self, on: bool) -> None:
+        onboarding.set_always_on_top(on)
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
+        self.btn_pin.setText("Unpin" if on else "Pin on top")
+        # changing the flag re-creates the native window; re-show + re-theme
+        self._dark_titlebar_done = False
+        self.show()
 
     # ==================================================================
     # UI construction
@@ -150,9 +182,13 @@ class MainWindow(QMainWindow):
 
         open_ = onboarding.tinker_open()
         self.tinker.setVisible(open_)
-        self._spacer.setVisible(not open_)
         self.btn_tinker.setChecked(open_)
         self.btn_tinker.setText("Fewer options" if open_ else "More options")
+        if not open_:
+            # start compact so the simple face has no empty gap
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: self.resize(
+                self.width(), self.sizeHint().height()))
 
     def _build_hero(self) -> QFrame:
         hero = QFrame()
@@ -279,7 +315,7 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(
                 f"Looper - {self.cycle_label.text()} matches - running")
         else:
-            self.setWindowTitle("Looper v1.6")
+            self.setWindowTitle("Looper v1.7")
 
     def _build_header(self) -> QFrame:
         panel = _panel()
@@ -305,6 +341,12 @@ class MainWindow(QMainWindow):
             lay.addWidget(b)
 
         lay.addStretch(1)
+
+        self.btn_pin = QPushButton("Pin on top")
+        self.btn_pin.setCheckable(True)
+        self.btn_pin.setToolTip("Keep Looper floating above the game window.")
+        self.btn_pin.toggled.connect(self._toggle_on_top)
+        lay.addWidget(self.btn_pin)
 
         self.btn_tinker = QPushButton("More options")
         self.btn_tinker.setCheckable(True)
@@ -810,9 +852,16 @@ class MainWindow(QMainWindow):
 
     def _toggle_tinker(self, open_: bool) -> None:
         self.tinker.setVisible(open_)
-        self._spacer.setVisible(not open_)
         self.btn_tinker.setText("Fewer options" if open_ else "More options")
         onboarding.set_tinker(open_)
+        # grow to show the editor, shrink back to a tidy card when closed -
+        # the spacer absorbs any leftover so panels stay top-aligned.
+        from PySide6.QtCore import QTimer
+        if open_:
+            self.resize(self.width(), max(self.height(), 720))
+        else:
+            QTimer.singleShot(0, lambda: self.resize(
+                self.width(), self.sizeHint().height()))
 
     # ==================================================================
     # setup guide

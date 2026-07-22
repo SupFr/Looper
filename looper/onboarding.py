@@ -64,6 +64,14 @@ def set_tinker(open_: bool) -> None:
     _write(tinker=open_)
 
 
+def always_on_top() -> bool:
+    return _state().get("always_on_top", False)
+
+
+def set_always_on_top(on: bool) -> None:
+    _write(always_on_top=on)
+
+
 @dataclass
 class _Row:
     frame: QFrame
